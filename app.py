@@ -37,21 +37,20 @@ inicializar_archivos()
 def obtener_datos_binance(symbol="SOLUSDT", interval="1h", limit=100):
     symbol = symbol.upper().strip()
     
-    # Múltiples endpoints para evadir el geo-bloqueo a los servidores de Streamlit (EEUU)
+    # Múltiples endpoints para evadir el geo-bloqueo a los servidores de Streamlit
     endpoints = [
-        "https://api.binance.us",            # Servidor para IPs de USA (Funciona perfecto en Streamlit)
-        "https://data-api.binance.vision",   # Servidor global de datos públicos
-        "https://api.binance.com",           # Servidor principal
-        "https://api1.binance.com",          # Backup 1
-        "https://api2.binance.com",          # Backup 2
-        "https://api3.binance.com"           # Backup 3
+        "https://api.binance.us",            
+        "https://data-api.binance.vision",   
+        "https://api.binance.com",           
+        "https://api1.binance.com",          
+        "https://api2.binance.com",          
+        "https://api3.binance.com"           
     ]
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
-    # Intentará conectarse a cada servidor hasta que uno responda exitosamente
     for base_url in endpoints:
         url = f"{base_url}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         try:
@@ -74,9 +73,9 @@ def obtener_datos_binance(symbol="SOLUSDT", interval="1h", limit=100):
                     df["open"] = df["open"].astype(float)
                     return df
         except Exception:
-            continue  # Si falla un servidor, ignora el error y pasa al siguiente
+            continue
             
-    return None # Solo devuelve None si TODOS los servidores fallan
+    return None
 
 # --- INTERFAZ / SIDEBAR ---
 st.sidebar.title("Idioma / Language")
@@ -154,24 +153,62 @@ if st.button("🚀 Calcular Parámetros Cuantitativos"):
             col2.metric("Stop Loss Sugerido", f"${stop_loss:,.4f}")
             col3.metric("Take Profit (1:2)", f"${take_profit:,.4f}")
 
+            # Construcción del gráfico de velas japonesas
             fig = go.Figure()
+            
             fig.add_trace(
-                go.Scatter(
+                go.Candlestick(
                     x=df["timestamp"],
-                    y=df["cierre"],
-                    mode="lines",
-                    name="Precio Cierre",
-                    line=dict(color="#F3BA2F") # Color amarillo estilo Binance
+                    open=df["open"],
+                    high=df["high"],
+                    low=df["low"],
+                    close=df["cierre"],
+                    name="Precio"
                 )
             )
+
+            # Línea de Take Profit (Verde)
+            fig.add_hline(
+                y=take_profit, 
+                line_dash="dash", 
+                line_color="#00ff00", 
+                annotation_text=f"Take Profit", 
+                annotation_position="top left",
+                annotation_font_color="#00ff00"
+            )
+
+            # Línea de Stop Loss (Roja)
+            fig.add_hline(
+                y=stop_loss, 
+                line_dash="dash", 
+                line_color="#ff0000", 
+                annotation_text=f"Stop Loss", 
+                annotation_position="bottom left",
+                annotation_font_color="#ff0000"
+            )
+
+            # Línea de Entrada (Gris/Blanca)
+            fig.add_hline(
+                y=precio_actual, 
+                line_dash="dot", 
+                line_color="#ffffff", 
+                annotation_text=f"Entrada", 
+                annotation_position="top left",
+                annotation_font_color="#ffffff"
+            )
+
             fig.update_layout(
-                title=f"Evolución de Precio en Vivo - {par_binance}",
+                title=f"Gráfico de Velas y Niveles Operativos - {par_binance}",
                 xaxis_title="Tiempo",
                 yaxis_title="Precio USDT",
                 template="plotly_dark",
+                xaxis_rangeslider_visible=False, # Oculta el slider inferior para mejor visualización en móviles
+                height=500
             )
+            
             st.plotly_chart(fig, use_container_width=True)
 
+            # Guardar en diario
             nuevo_trade = pd.DataFrame(
                 [[
                     datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
