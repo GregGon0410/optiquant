@@ -19,7 +19,6 @@ st.set_page_config(
 # --- SISTEMA DE NOTIFICACIONES PUSH (IPHONE) ---
 def notificar_iphone(email_usuario):
     """Envía un mensaje instantáneo a Telegram cuando hay un nuevo registro"""
-    # REEMPLAZA ESTOS DATOS CON LOS DE TU BOT CUANDO LO CREES
     TELEGRAM_TOKEN = "8819546570:AAEFyzGhcB4R7Q4Bl7K8RlNlnjYDSzZbJeA"
     TELEGRAM_CHAT_ID = "1854336942"
     
@@ -40,13 +39,22 @@ def conectar_base_datos():
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-        credenciales = Credentials.from_service_account_file("credenciales.json", scopes=scopes)
+        
+        # NUBE: Si está en Streamlit, usa la bóveda secreta
+        if "google_credentials" in st.secrets:
+            import json
+            creds_dict = json.loads(st.secrets["google_credentials"])
+            credenciales = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        # LOCAL: Si está en tu computadora, usa el archivo
+        else:
+            credenciales = Credentials.from_service_account_file("credenciales.json", scopes=scopes)
+            
         cliente = gspread.authorize(credenciales)
         db = cliente.open("OptiQuant_DB")
         hoja_vip = db.worksheet("usuarios_vip")
         return hoja_vip
     except Exception as e:
-        st.error(f"Error conectando a la base de datos Google Sheets. Verifica credenciales.json. Error: {e}")
+        st.error(f"Error de conexión a la base de datos: {e}")
         return None
 
 hoja_vip = conectar_base_datos()
@@ -60,7 +68,6 @@ def es_usuario_vip_gs(email_consulta):
         registros = hoja_vip.get_all_records()
         for fila in registros:
             if str(fila.get("email", "")).strip().lower() == email_consulta.strip().lower():
-                # Solo deja entrar si tú lo marcaste como "Activo"
                 if str(fila.get("estado", "")) == "Activo":
                     return True
     except Exception as e:
@@ -74,9 +81,7 @@ def registrar_nuevo_vip_gs(email, wallet="N/A"):
         return False
     try:
         fecha_actual = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # AHORA SE GUARDA COMO PENDIENTE
         hoja_vip.append_row([email, wallet, fecha_actual, "Pendiente"])
-        # DISPARA LA NOTIFICACIÓN A TU IPHONE
         notificar_iphone(email)
         return True
     except Exception as e:
@@ -230,7 +235,6 @@ with vip_menu:
         submitted_vip = st.form_submit_button(t["btn_notify"])
         if submitted_vip and email_user:
             if registrar_nuevo_vip_gs(email_user, "BinancePay"):
-                # Muestra el mensaje pero ya NO da acceso ni hace rerun
                 st.success("¡Registro exitoso! Tu pago está en verificación. Serás notificado una vez se te otorgue el acceso.")
 
 login_menu = st.sidebar.expander(t["vip_login"])
@@ -283,7 +287,6 @@ if st.button(t["btn_calc"]):
                     df_visitas.loc[df_visitas['uid'] == uid_actual, 'consultas'] = consultas_restantes
                     df_visitas.to_csv(VISITAS_DB, index=False)
                     
-                    # Actualiza el contador del panel al instante sin reiniciar la página
                     if consultas_restantes > 0:
                         panel_status.info(f"{t['free_left']} **{consultas_restantes}/3**")
                     else:
@@ -315,9 +318,6 @@ if st.button(t["btn_calc"]):
                 nuevo_trade = pd.DataFrame([[datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), par_binance, "Long", precio_actual, stop_loss, take_profit, "Pending"]], columns=["fecha", "activo", "tipo", "entrada", "stop_loss", "take_profit", "resultado"])
                 df_d = pd.read_csv(DIARIO_DB)
                 pd.concat([df_d, nuevo_trade], ignore_index=True).to_csv(DIARIO_DB, index=False)
-                
-                # ¡AQUÍ ESTABA EL ERROR! 
-                # Eliminé el st.rerun() que había aquí y que borraba la gráfica al instante.
 
             except Exception as e:
                 st.error(t["err_math"])
