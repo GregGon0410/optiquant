@@ -24,57 +24,59 @@ def inicializar_archivos():
     if not os.path.exists(DIARIO_DB):
         df_d = pd.DataFrame(
             columns=[
-                "fecha",
-                "activo",
-                "tipo",
-                "entrada",
-                "stop_loss",
-                "take_profit",
-                "resultado",
+                "fecha", "activo", "tipo", "entrada",
+                "stop_loss", "take_profit", "resultado",
             ]
         )
         df_d.to_csv(DIARIO_DB, index=False)
 
 inicializar_archivos()
 
-# --- FUNCIONES DE DATOS EN VIVO (BINANCE API) ---
+# --- FUNCIONES DE DATOS EN VIVO (BINANCE API - ANTI GEO-BLOQUEO) ---
 @st.cache_data(ttl=60)
 def obtener_datos_binance(symbol="SOLUSDT", interval="1h", limit=100):
-    # Forzar siempre mayúsculas estrictas para evitar errores con la API de Binance
     symbol = symbol.upper().strip()
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    
+    # Múltiples endpoints para evadir el geo-bloqueo a los servidores de Streamlit (EEUU)
+    endpoints = [
+        "https://api.binance.us",            # Servidor para IPs de USA (Funciona perfecto en Streamlit)
+        "https://data-api.binance.vision",   # Servidor global de datos públicos
+        "https://api.binance.com",           # Servidor principal
+        "https://api1.binance.com",          # Backup 1
+        "https://api2.binance.com",          # Backup 2
+        "https://api3.binance.com"           # Backup 3
+    ]
 
-    # Headers simulando un navegador real para evitar bloqueos de la API pública
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            # Validar que la data no esté vacía y sea una lista
-            if not data or not isinstance(data, list):
-                return None
+    # Intentará conectarse a cada servidor hasta que uno responda exitosamente
+    for base_url in endpoints:
+        url = f"{base_url}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        try:
+            response = requests.get(url, headers=headers, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data and isinstance(data, list) and len(data) > 0:
+                    df = pd.DataFrame(
+                        data,
+                        columns=[
+                            "timestamp", "open", "high", "low", "close", "volume",
+                            "close_time", "qav", "num_trades", "taker_base_vol",
+                            "taker_quote_vol", "ignore",
+                        ],
+                    )
+                    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+                    df["cierre"] = df["close"].astype(float)
+                    df["high"] = df["high"].astype(float)
+                    df["low"] = df["low"].astype(float)
+                    df["open"] = df["open"].astype(float)
+                    return df
+        except Exception:
+            continue  # Si falla un servidor, ignora el error y pasa al siguiente
             
-            df = pd.DataFrame(
-                data,
-                columns=[
-                    "timestamp", "open", "high", "low", "close", "volume",
-                    "close_time", "qav", "num_trades", "taker_base_vol",
-                    "taker_quote_vol", "ignore",
-                ],
-            )
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-            df["cierre"] = df["close"].astype(float)
-            df["high"] = df["high"].astype(float)
-            df["low"] = df["low"].astype(float)
-            df["open"] = df["open"].astype(float)
-            return df
-        else:
-            return None
-    except Exception:
-        return None
+    return None # Solo devuelve None si TODOS los servidores fallan
 
 # --- INTERFAZ / SIDEBAR ---
 st.sidebar.title("Idioma / Language")
@@ -89,11 +91,9 @@ vip_menu = st.sidebar.expander("💎 Acceso VIP (Consultas Ilimitadas)")
 with vip_menu:
     st.write("Obtén acceso ilimitado de por vida transfiriendo **10 USDT** vía Binance Pay.")
     
-    # Ajuste responsivo del QR para dispositivos móviles
     if os.path.exists("qr_binance.jpg"):
         st.image("qr_binance.jpg", caption="Escanea para pagar con Binance Pay", use_container_width=True)
     
-    # ID de Binance Pay actualizado
     st.info("ID Binance Pay: **35813872**")
 
     with st.form("form_vip"):
@@ -127,7 +127,6 @@ if ver_diario:
         st.info("Aún no hay registros en el diario.")
 
 st.markdown("---")
-# Forzar validación del texto ingresado desde la caja de texto
 simbolo_input = st.text_input("Ingresa la cripto (ej: SOL, SUI, BTC):", value="SOL").upper().strip()
 par_binance = f"{simbolo_input}USDT"
 
@@ -136,10 +135,9 @@ nivel_riesgo = st.selectbox(
 )
 
 if st.button("🚀 Calcular Parámetros Cuantitativos"):
-    with st.spinner(f"Conectando con Binance para {par_binance}..."):
+    with st.spinner(f"Conectando con servidores globales para {par_binance}..."):
         df = obtener_datos_binance(par_binance)
 
-    # Validación estricta anti-IndexError
     if df is not None and not df.empty and "cierre" in df.columns:
         try:
             precio_actual = df["cierre"].iloc[-1]
@@ -156,7 +154,6 @@ if st.button("🚀 Calcular Parámetros Cuantitativos"):
             col2.metric("Stop Loss Sugerido", f"${stop_loss:,.4f}")
             col3.metric("Take Profit (1:2)", f"${take_profit:,.4f}")
 
-            # Gráfico interactivo Plotly
             fig = go.Figure()
             fig.add_trace(
                 go.Scatter(
@@ -164,6 +161,7 @@ if st.button("🚀 Calcular Parámetros Cuantitativos"):
                     y=df["cierre"],
                     mode="lines",
                     name="Precio Cierre",
+                    line=dict(color="#F3BA2F") # Color amarillo estilo Binance
                 )
             )
             fig.update_layout(
@@ -174,7 +172,6 @@ if st.button("🚀 Calcular Parámetros Cuantitativos"):
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # Guardar automáticamente en el diario local
             nuevo_trade = pd.DataFrame(
                 [[
                     datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -197,4 +194,4 @@ if st.button("🚀 Calcular Parámetros Cuantitativos"):
         except Exception as e:
             st.error(f"Error procesando los indicadores cuantitativos: {e}")
     else:
-        st.error(f"⚠️ No se pudieron obtener datos para **{par_binance}**. Asegúrate de escribir el símbolo correcto (ej: SOL, BTC, SUI) sin espacios.")
+        st.error(f"⚠️ No se pudieron obtener datos para **{par_binance}**. Es posible que la moneda no exista o haya bloqueos de red.")
