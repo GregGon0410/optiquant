@@ -10,6 +10,7 @@ st.set_page_config(
     page_title="OptiQuant - Quantitative Crypto Risk",
     page_icon="⚡",
     layout="centered",
+    initial_sidebar_state="expanded"
 )
 
 # --- ARCHIVOS DE BASE DE DATOS LOCALES ---
@@ -17,6 +18,7 @@ USUARIOS_DB = "usuarios_vip.csv"
 DIARIO_DB = "diario_trading.csv"
 
 def inicializar_archivos():
+    """Crea los archivos CSV si no existen para evitar errores de lectura."""
     if not os.path.exists(USUARIOS_DB):
         df_u = pd.DataFrame(columns=["email", "wallet", "fecha", "estado"])
         df_u.to_csv(USUARIOS_DB, index=False)
@@ -32,12 +34,24 @@ def inicializar_archivos():
 
 inicializar_archivos()
 
+# --- FUNCIÓN INTELIGENTE DE FORMATO DE PRECIOS ---
+def formatear_precio(valor):
+    """Ajusta dinámicamente los decimales según lo barata que sea la criptomoneda."""
+    if valor < 0.00001:
+        return f"${valor:,.10f}"  # Para tokens ultra baratos como BTTC o PEPE
+    elif valor < 0.001:
+        return f"${valor:,.8f}"   # Para tokens como SHIB
+    elif valor < 1:
+        return f"${valor:,.6f}"   # Para tokens por debajo de 1 dólar
+    else:
+        return f"${valor:,.4f}"   # Para monedas estándar (BTC, SOL, BNB)
+
 # --- FUNCIONES DE DATOS EN VIVO (BINANCE API - ANTI GEO-BLOQUEO) ---
 @st.cache_data(ttl=60)
 def obtener_datos_binance(symbol="SOLUSDT", interval="1h", limit=100):
+    """Obtiene datos de velas japonesas evadiendo bloqueos regionales de IP."""
     symbol = symbol.upper().strip()
     
-    # Múltiples endpoints para evadir el geo-bloqueo a los servidores de Streamlit
     endpoints = [
         "https://api.binance.us",            
         "https://data-api.binance.vision",   
@@ -54,7 +68,7 @@ def obtener_datos_binance(symbol="SOLUSDT", interval="1h", limit=100):
     for base_url in endpoints:
         url = f"{base_url}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         try:
-            response = requests.get(url, headers=headers, timeout=5)
+            response = requests.get(url, headers=headers, timeout=4)
             if response.status_code == 200:
                 data = response.json()
                 if data and isinstance(data, list) and len(data) > 0:
@@ -73,7 +87,7 @@ def obtener_datos_binance(symbol="SOLUSDT", interval="1h", limit=100):
                     df["open"] = df["open"].astype(float)
                     return df
         except Exception:
-            continue
+            continue # Si falla, intenta con el siguiente servidor en microsegundos
             
     return None
 
@@ -99,19 +113,22 @@ with vip_menu:
         email_user = st.text_input("Tu Correo / Binance Pay ID")
         submitted_vip = st.form_submit_button("Registrar Pago VIP")
         if submitted_vip and email_user:
-            df_u = pd.read_csv(USUARIOS_DB)
-            nuevo_registro = pd.DataFrame(
-                [[
-                    email_user,
-                    "BinancePay",
-                    datetime.datetime.now().strftime("%Y-%m-%d"),
-                    "Activo",
-                ]],
-                columns=["email", "wallet", "fecha", "estado"],
-            )
-            df_u = pd.concat([df_u, nuevo_registro], ignore_index=True)
-            df_u.to_csv(USUARIOS_DB, index=False)
-            st.success("¡Solicitud enviada! Tu cuenta VIP será activada en minutos.")
+            try:
+                df_u = pd.read_csv(USUARIOS_DB)
+                nuevo_registro = pd.DataFrame(
+                    [[
+                        email_user,
+                        "BinancePay",
+                        datetime.datetime.now().strftime("%Y-%m-%d"),
+                        "Activo",
+                    ]],
+                    columns=["email", "wallet", "fecha", "estado"],
+                )
+                df_u = pd.concat([df_u, nuevo_registro], ignore_index=True)
+                df_u.to_csv(USUARIOS_DB, index=False)
+                st.success("¡Solicitud enviada! Tu cuenta VIP será activada en minutos.")
+            except Exception as e:
+                st.error("Error al registrar el usuario. Intenta de nuevo.")
 
 # --- CUERPO PRINCIPAL DE LA APP ---
 st.title("⚡ OptiQuant")
@@ -121,12 +138,12 @@ ver_diario = st.checkbox("📁 Ver historial de tu diario de trading local")
 if ver_diario:
     if os.path.exists(DIARIO_DB):
         df_diario = pd.read_csv(DIARIO_DB)
-        st.dataframe(df_diario)
+        st.dataframe(df_diario, use_container_width=True)
     else:
         st.info("Aún no hay registros en el diario.")
 
 st.markdown("---")
-simbolo_input = st.text_input("Ingresa la cripto (ej: SOL, SUI, BTC):", value="SOL").upper().strip()
+simbolo_input = st.text_input("Ingresa la cripto (ej: BTTC, SOL, SHIB):", value="BTTC").upper().strip()
 par_binance = f"{simbolo_input}USDT"
 
 nivel_riesgo = st.selectbox(
@@ -148,10 +165,11 @@ if st.button("🚀 Calcular Parámetros Cuantitativos"):
 
             st.success(f"¡Datos en vivo obtenidos con éxito para {par_binance}!")
 
+            # Métricas dinámicas que soportan cualquier cantidad de decimales
             col1, col2, col3 = st.columns(3)
-            col1.metric("Precio Actual", f"${precio_actual:,.4f}")
-            col2.metric("Stop Loss Sugerido", f"${stop_loss:,.4f}")
-            col3.metric("Take Profit (1:2)", f"${take_profit:,.4f}")
+            col1.metric("Precio Actual", formatear_precio(precio_actual))
+            col2.metric("Stop Loss Sugerido", formatear_precio(stop_loss))
+            col3.metric("Take Profit (1:2)", formatear_precio(take_profit))
 
             # Construcción del gráfico de velas japonesas
             fig = go.Figure()
@@ -172,7 +190,7 @@ if st.button("🚀 Calcular Parámetros Cuantitativos"):
                 y=take_profit, 
                 line_dash="dash", 
                 line_color="#00ff00", 
-                annotation_text=f"Take Profit", 
+                annotation_text="Take Profit", 
                 annotation_position="top left",
                 annotation_font_color="#00ff00"
             )
@@ -182,17 +200,17 @@ if st.button("🚀 Calcular Parámetros Cuantitativos"):
                 y=stop_loss, 
                 line_dash="dash", 
                 line_color="#ff0000", 
-                annotation_text=f"Stop Loss", 
+                annotation_text="Stop Loss", 
                 annotation_position="bottom left",
                 annotation_font_color="#ff0000"
             )
 
-            # Línea de Entrada (Gris/Blanca)
+            # Línea de Entrada (Blanca)
             fig.add_hline(
                 y=precio_actual, 
                 line_dash="dot", 
                 line_color="#ffffff", 
-                annotation_text=f"Entrada", 
+                annotation_text="Entrada", 
                 annotation_position="top left",
                 annotation_font_color="#ffffff"
             )
@@ -202,9 +220,12 @@ if st.button("🚀 Calcular Parámetros Cuantitativos"):
                 xaxis_title="Tiempo",
                 yaxis_title="Precio USDT",
                 template="plotly_dark",
-                xaxis_rangeslider_visible=False, # Oculta el slider inferior para mejor visualización en móviles
+                xaxis_rangeslider_visible=False,
                 height=500
             )
+            
+            # Bloquear la notación científica en el eje Y para monedas ultra baratas
+            fig.update_yaxes(exponentformat="none")
             
             st.plotly_chart(fig, use_container_width=True)
 
@@ -229,6 +250,6 @@ if st.button("🚀 Calcular Parámetros Cuantitativos"):
             df_d.to_csv(DIARIO_DB, index=False)
 
         except Exception as e:
-            st.error(f"Error procesando los indicadores cuantitativos: {e}")
+            st.error("Error matemático procesando los indicadores. Intenta con otra temporalidad u otro activo.")
     else:
-        st.error(f"⚠️ No se pudieron obtener datos para **{par_binance}**. Es posible que la moneda no exista o haya bloqueos de red.")
+        st.error(f"⚠️ No se pudieron obtener datos para **{par_binance}**. Verifica que el símbolo esté escrito correctamente (ej: BTTC, SOL, SUI).")
