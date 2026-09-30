@@ -13,12 +13,17 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --- MEMORIA DE SESIÓN (CONTADOR Y VIP) ---
+if 'consultas_restantes' not in st.session_state:
+    st.session_state['consultas_restantes'] = 3
+if 'es_vip' not in st.session_state:
+    st.session_state['es_vip'] = False
+
 # --- ARCHIVOS DE BASE DE DATOS LOCALES ---
 USUARIOS_DB = "usuarios_vip.csv"
 DIARIO_DB = "diario_trading.csv"
 
 def inicializar_archivos():
-    """Crea los archivos CSV si no existen para evitar errores de lectura."""
     if not os.path.exists(USUARIOS_DB):
         df_u = pd.DataFrame(columns=["email", "wallet", "fecha", "estado"])
         df_u.to_csv(USUARIOS_DB, index=False)
@@ -36,22 +41,19 @@ inicializar_archivos()
 
 # --- FUNCIÓN INTELIGENTE DE FORMATO DE PRECIOS ---
 def formatear_precio(valor):
-    """Ajusta dinámicamente los decimales según lo barata que sea la criptomoneda."""
     if valor < 0.00001:
-        return f"${valor:,.10f}"  # Para tokens ultra baratos como BTTC o PEPE
+        return f"${valor:,.10f}"
     elif valor < 0.001:
-        return f"${valor:,.8f}"   # Para tokens como SHIB
+        return f"${valor:,.8f}"
     elif valor < 1:
-        return f"${valor:,.6f}"   # Para tokens por debajo de 1 dólar
+        return f"${valor:,.6f}"
     else:
-        return f"${valor:,.4f}"   # Para monedas estándar (BTC, SOL, BNB)
+        return f"${valor:,.4f}"
 
 # --- FUNCIONES DE DATOS EN VIVO (BINANCE API - ANTI GEO-BLOQUEO) ---
 @st.cache_data(ttl=60)
 def obtener_datos_binance(symbol="SOLUSDT", interval="1h", limit=100):
-    """Obtiene datos de velas japonesas evadiendo bloqueos regionales de IP."""
     symbol = symbol.upper().strip()
-    
     endpoints = [
         "https://api.binance.us",            
         "https://data-api.binance.vision",   
@@ -60,10 +62,7 @@ def obtener_datos_binance(symbol="SOLUSDT", interval="1h", limit=100):
         "https://api2.binance.com",          
         "https://api3.binance.com"           
     ]
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
     for base_url in endpoints:
         url = f"{base_url}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
@@ -87,8 +86,7 @@ def obtener_datos_binance(symbol="SOLUSDT", interval="1h", limit=100):
                     df["open"] = df["open"].astype(float)
                     return df
         except Exception:
-            continue # Si falla, intenta con el siguiente servidor en microsegundos
-            
+            continue
     return None
 
 # --- INTERFAZ / SIDEBAR ---
@@ -96,43 +94,50 @@ st.sidebar.title("Idioma / Language")
 idioma = st.sidebar.selectbox("", ["Español", "English"])
 
 st.sidebar.title("Panel de Control")
-consultas_restantes = st.sidebar.selectbox(
-    "Consultas gratuitas restantes: 3/3", ["Usar plan Gratuito"]
-)
+# Creamos un espacio vacío para el contador, así se actualiza al instante
+panel_status = st.sidebar.empty()
 
-vip_menu = st.sidebar.expander("💎 Acceso VIP (Consultas Ilimitadas)")
+vip_menu = st.sidebar.expander("💎 Adquirir Acceso VIP (10 USDT)")
 with vip_menu:
-    st.write("Obtén acceso ilimitado de por vida transfiriendo **10 USDT** vía Binance Pay.")
-    
+    st.write("Obtén acceso ilimitado de por vida transfiriendo **10 USDT**.")
     if os.path.exists("qr_binance.jpg"):
         st.image("qr_binance.jpg", caption="Escanea para pagar con Binance Pay", use_container_width=True)
-    
     st.info("ID Binance Pay: **35813872**")
 
     with st.form("form_vip"):
         email_user = st.text_input("Tu Correo / Binance Pay ID")
-        submitted_vip = st.form_submit_button("Registrar Pago VIP")
+        submitted_vip = st.form_submit_button("Notificar Pago")
         if submitted_vip and email_user:
             try:
                 df_u = pd.read_csv(USUARIOS_DB)
                 nuevo_registro = pd.DataFrame(
-                    [[
-                        email_user,
-                        "BinancePay",
-                        datetime.datetime.now().strftime("%Y-%m-%d"),
-                        "Activo",
-                    ]],
+                    [[email_user, "BinancePay", datetime.datetime.now().strftime("%Y-%m-%d"), "Activo"]],
                     columns=["email", "wallet", "fecha", "estado"],
                 )
                 df_u = pd.concat([df_u, nuevo_registro], ignore_index=True)
                 df_u.to_csv(USUARIOS_DB, index=False)
-                st.success("¡Solicitud enviada! Tu cuenta VIP será activada en minutos.")
+                # Volvemos al usuario VIP inmediatamente en esta sesión
+                st.session_state['es_vip'] = True
+                st.success("¡Pago notificado! Ya tienes consultas ilimitadas.")
             except Exception as e:
-                st.error("Error al registrar el usuario. Intenta de nuevo.")
+                st.error("Error al registrar. Intenta de nuevo.")
+
+# --- LOGIN PARA USUARIOS QUE YA SON VIP ---
+login_menu = st.sidebar.expander("🔑 Ya soy VIP (Ingresar)")
+with login_menu:
+    email_login = st.text_input("Ingresa el correo con el que pagaste:")
+    if st.button("Verificar y Entrar"):
+        df_usuarios = pd.read_csv(USUARIOS_DB)
+        if email_login in df_usuarios['email'].values:
+            st.session_state['es_vip'] = True
+            st.success("¡Bienvenido de vuelta! VIP Activado.")
+            st.rerun() # Reinicia la app para aplicar el VIP
+        else:
+            st.error("Correo no encontrado en la base de datos VIP.")
 
 # --- CUERPO PRINCIPAL DE LA APP ---
 st.title("⚡ OptiQuant")
-st.markdown("Gestión de riesgo avanzada y motor cuantitativo impulsado por datos en vivo de Binance y Binance Pay.")
+st.markdown("Gestión de riesgo avanzada y motor cuantitativo impulsado por datos en vivo.")
 
 ver_diario = st.checkbox("📁 Ver historial de tu diario de trading local")
 if ver_diario:
@@ -151,105 +156,62 @@ nivel_riesgo = st.selectbox(
 )
 
 if st.button("🚀 Calcular Parámetros Cuantitativos"):
-    with st.spinner(f"Conectando con servidores globales para {par_binance}..."):
-        df = obtener_datos_binance(par_binance)
-
-    if df is not None and not df.empty and "cierre" in df.columns:
-        try:
-            precio_actual = df["cierre"].iloc[-1]
-            atr = (df["high"] - df["low"]).mean()
-
-            factor = 1.0 if "Alto" in nivel_riesgo else (0.7 if "Medio" in nivel_riesgo else 0.5)
-            stop_loss = precio_actual - (atr * factor)
-            take_profit = precio_actual + (atr * factor * 2)
-
-            st.success(f"¡Datos en vivo obtenidos con éxito para {par_binance}!")
-
-            # Métricas dinámicas que soportan cualquier cantidad de decimales
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Precio Actual", formatear_precio(precio_actual))
-            col2.metric("Stop Loss Sugerido", formatear_precio(stop_loss))
-            col3.metric("Take Profit (1:2)", formatear_precio(take_profit))
-
-            # Construcción del gráfico de velas japonesas
-            fig = go.Figure()
-            
-            fig.add_trace(
-                go.Candlestick(
-                    x=df["timestamp"],
-                    open=df["open"],
-                    high=df["high"],
-                    low=df["low"],
-                    close=df["cierre"],
-                    name="Precio"
-                )
-            )
-
-            # Línea de Take Profit (Verde)
-            fig.add_hline(
-                y=take_profit, 
-                line_dash="dash", 
-                line_color="#00ff00", 
-                annotation_text="Take Profit", 
-                annotation_position="top left",
-                annotation_font_color="#00ff00"
-            )
-
-            # Línea de Stop Loss (Roja)
-            fig.add_hline(
-                y=stop_loss, 
-                line_dash="dash", 
-                line_color="#ff0000", 
-                annotation_text="Stop Loss", 
-                annotation_position="bottom left",
-                annotation_font_color="#ff0000"
-            )
-
-            # Línea de Entrada (Blanca)
-            fig.add_hline(
-                y=precio_actual, 
-                line_dash="dot", 
-                line_color="#ffffff", 
-                annotation_text="Entrada", 
-                annotation_position="top left",
-                annotation_font_color="#ffffff"
-            )
-
-            fig.update_layout(
-                title=f"Gráfico de Velas y Niveles Operativos - {par_binance}",
-                xaxis_title="Tiempo",
-                yaxis_title="Precio USDT",
-                template="plotly_dark",
-                xaxis_rangeslider_visible=False,
-                height=500
-            )
-            
-            # Bloquear la notación científica en el eje Y para monedas ultra baratas
-            fig.update_yaxes(exponentformat="none")
-            
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Guardar en diario
-            nuevo_trade = pd.DataFrame(
-                [[
-                    datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    par_binance,
-                    "Compra Long",
-                    precio_actual,
-                    stop_loss,
-                    take_profit,
-                    "Pendiente",
-                ]],
-                columns=[
-                    "fecha", "activo", "tipo", "entrada",
-                    "stop_loss", "take_profit", "resultado",
-                ],
-            )
-            df_d = pd.read_csv(DIARIO_DB)
-            df_d = pd.concat([df_d, nuevo_trade], ignore_index=True)
-            df_d.to_csv(DIARIO_DB, index=False)
-
-        except Exception as e:
-            st.error("Error matemático procesando los indicadores. Intenta con otra temporalidad u otro activo.")
+    # VERIFICACIÓN DE LÍMITE DE CONSULTAS ANTES DE CALCULAR
+    if not st.session_state['es_vip'] and st.session_state['consultas_restantes'] <= 0:
+        st.error("🔒 **Has agotado tus 3 consultas gratuitas por hoy.** ¡Adquiere el pase VIP en el panel izquierdo para tener acceso ilimitado!")
     else:
-        st.error(f"⚠️ No se pudieron obtener datos para **{par_binance}**. Verifica que el símbolo esté escrito correctamente (ej: BTTC, SOL, SUI).")
+        with st.spinner(f"Conectando con servidores globales para {par_binance}..."):
+            df = obtener_datos_binance(par_binance)
+
+        if df is not None and not df.empty and "cierre" in df.columns:
+            try:
+                # Si el cálculo fue exitoso y el usuario NO es VIP, restamos 1 al contador
+                if not st.session_state['es_vip']:
+                    st.session_state['consultas_restantes'] -= 1
+
+                precio_actual = df["cierre"].iloc[-1]
+                atr = (df["high"] - df["low"]).mean()
+
+                factor = 1.0 if "Alto" in nivel_riesgo else (0.7 if "Medio" in nivel_riesgo else 0.5)
+                stop_loss = precio_actual - (atr * factor)
+                take_profit = precio_actual + (atr * factor * 2)
+
+                st.success(f"¡Datos en vivo obtenidos con éxito para {par_binance}!")
+
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Precio Actual", formatear_precio(precio_actual))
+                col2.metric("Stop Loss Sugerido", formatear_precio(stop_loss))
+                col3.metric("Take Profit (1:2)", formatear_precio(take_profit))
+
+                fig = go.Figure()
+                fig.add_trace(go.Candlestick(
+                    x=df["timestamp"], open=df["open"], high=df["high"],
+                    low=df["low"], close=df["cierre"], name="Precio"
+                ))
+                fig.add_hline(y=take_profit, line_dash="dash", line_color="#00ff00", annotation_text="Take Profit", annotation_position="top left", annotation_font_color="#00ff00")
+                fig.add_hline(y=stop_loss, line_dash="dash", line_color="#ff0000", annotation_text="Stop Loss", annotation_position="bottom left", annotation_font_color="#ff0000")
+                fig.add_hline(y=precio_actual, line_dash="dot", line_color="#ffffff", annotation_text="Entrada", annotation_position="top left", annotation_font_color="#ffffff")
+                fig.update_layout(title=f"Niveles Operativos - {par_binance}", xaxis_title="Tiempo", yaxis_title="Precio USDT", template="plotly_dark", xaxis_rangeslider_visible=False, height=500)
+                fig.update_yaxes(exponentformat="none")
+                
+                st.plotly_chart(fig, use_container_width=True)
+
+                nuevo_trade = pd.DataFrame([[datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), par_binance, "Compra Long", precio_actual, stop_loss, take_profit, "Pendiente"]], columns=["fecha", "activo", "tipo", "entrada", "stop_loss", "take_profit", "resultado"])
+                df_d = pd.read_csv(DIARIO_DB)
+                df_d = pd.concat([df_d, nuevo_trade], ignore_index=True)
+                df_d.to_csv(DIARIO_DB, index=False)
+
+            except Exception as e:
+                st.error("Error matemático procesando los indicadores.")
+        else:
+            st.error(f"⚠️ No se pudieron obtener datos para **{par_binance}**.")
+
+# --- ACTUALIZACIÓN DINÁMICA DEL PANEL LATERAL ---
+# Esto se pone al final para que refleje la resta del contador inmediatamente después de dar clic
+if st.session_state['es_vip']:
+    panel_status.success("👑 **Modo VIP Activo:** Consultas Ilimitadas")
+else:
+    if st.session_state['consultas_restantes'] > 0:
+        panel_status.info(f"🟢 Consultas gratuitas restantes: **{st.session_state['consultas_restantes']}/3**")
+    else:
+        panel_status.error("🔴 **Consultas agotadas (0/3).** ¡Adquiere VIP!")
