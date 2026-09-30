@@ -15,40 +15,52 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="expanded"
 )
-# --- CONEXIÓN A GOOGLE SHEETS (Caché para optimizar rendimiento) ---
+
+# --- SISTEMA DE NOTIFICACIONES PUSH (IPHONE) ---
+def notificar_iphone(email_usuario):
+    """Envía un mensaje instantáneo a Telegram cuando hay un nuevo registro"""
+    # REEMPLAZA ESTOS DATOS CON LOS DE TU BOT CUANDO LO CREES
+    TELEGRAM_TOKEN = "8819546570:AAEFyzGhcB4R7Q4Bl7K8RlNlnjYDSzZbJeA"
+    TELEGRAM_CHAT_ID = "1854336942"
+    
+    mensaje = f"🚨 NUEVO PAGO VIP EN OPTIQUANT 🚨\n\nCorreo: {email_usuario}\n\nAcción requerida: Verifica Binance Pay y cambia el estado a 'Activo' en tu Google Sheets (OptiQuant_DB) para darle acceso."
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje}
+    
+    try:
+        requests.post(url, data=payload, timeout=5)
+    except Exception:
+        pass # Si falla el mensaje, la app sigue funcionando normal
+
+# --- CONEXIÓN A GOOGLE SHEETS ---
 @st.cache_resource
 def conectar_base_datos():
     try:
-        # Definir los permisos necesarios para la API
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-        # Cargar el archivo JSON local
         credenciales = Credentials.from_service_account_file("credenciales.json", scopes=scopes)
         cliente = gspread.authorize(credenciales)
-        
-        # Abrir la hoja de cálculo por su nombre exacto
         db = cliente.open("OptiQuant_DB")
         hoja_vip = db.worksheet("usuarios_vip")
-        
         return hoja_vip
     except Exception as e:
         st.error(f"Error conectando a la base de datos Google Sheets. Verifica credenciales.json. Error: {e}")
         return None
 
-# Inicializar la conexión
 hoja_vip = conectar_base_datos()
+
 # --- FUNCIONES DE BASE DE DATOS EN LA NUBE ---
 def es_usuario_vip_gs(email_consulta):
-    """Verifica si el correo está en Google Sheets y está Activo"""
+    """Verifica si el correo está en Google Sheets y está 'Activo'"""
     if hoja_vip is None:
         return False
-        
     try:
         registros = hoja_vip.get_all_records()
         for fila in registros:
             if str(fila.get("email", "")).strip().lower() == email_consulta.strip().lower():
+                # Solo deja entrar si tú lo marcaste como "Activo"
                 if str(fila.get("estado", "")) == "Activo":
                     return True
     except Exception as e:
@@ -56,19 +68,21 @@ def es_usuario_vip_gs(email_consulta):
     return False
 
 def registrar_nuevo_vip_gs(email, wallet="N/A"):
-    """Guarda un nuevo usuario VIP directamente en Google Sheets"""
+    """Guarda un nuevo usuario VIP con estado Pendiente y te notifica"""
     if hoja_vip is None:
         st.error("No hay conexión a la base de datos para registrar.")
         return False
-        
     try:
-        import datetime
         fecha_actual = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        hoja_vip.append_row([email, wallet, fecha_actual, "Activo"])
+        # AHORA SE GUARDA COMO PENDIENTE
+        hoja_vip.append_row([email, wallet, fecha_actual, "Pendiente"])
+        # DISPARA LA NOTIFICACIÓN A TU IPHONE
+        notificar_iphone(email)
         return True
     except Exception as e:
         st.error(f"Error al escribir en la base de datos: {e}")
         return False
+
 # --- ARCHIVOS DE BASE DE DATOS LOCALES ---
 USUARIOS_DB = "usuarios_vip.csv"
 DIARIO_DB = "diario_trading.csv"
@@ -84,8 +98,7 @@ def inicializar_archivos():
 
 inicializar_archivos()
 
-# --- SISTEMA DE RASTREO ANTI-REFRESH (HUELLA DIGITAL) ---
-# Le asigna un ID único a cada visitante en la URL para que no puedan engañar al contador recargando la página
+# --- SISTEMA DE RASTREO ANTI-REFRESH ---
 if "uid" not in st.query_params:
     nuevo_uid = str(uuid.uuid4())
     st.query_params["uid"] = nuevo_uid
@@ -95,11 +108,9 @@ if "uid" not in st.query_params:
     df_v.to_csv(VISITAS_DB, index=False)
 
 uid_actual = st.query_params["uid"]
-
-# Cargar las consultas reales del usuario actual desde la base de datos
 df_visitas = pd.read_csv(VISITAS_DB)
+
 if uid_actual not in df_visitas['uid'].values:
-    # Por si acaso el registro se borró, lo recreamos
     nuevo_registro = pd.DataFrame([{"uid": uid_actual, "consultas": 3}])
     df_visitas = pd.concat([df_visitas, nuevo_registro], ignore_index=True)
     df_visitas.to_csv(VISITAS_DB, index=False)
@@ -107,18 +118,17 @@ if uid_actual not in df_visitas['uid'].values:
 else:
     consultas_restantes = int(df_visitas.loc[df_visitas['uid'] == uid_actual, 'consultas'].values[0])
 
-# Estado VIP de la sesión actual
 if 'es_vip' not in st.session_state:
     st.session_state['es_vip'] = False
 
-# --- FUNCIÓN INTELIGENTE DE FORMATO DE PRECIOS ---
+# --- FUNCIÓN DE FORMATO DE PRECIOS ---
 def formatear_precio(valor):
     if valor < 0.00001: return f"${valor:,.10f}"
     elif valor < 0.001: return f"${valor:,.8f}"
     elif valor < 1: return f"${valor:,.6f}"
     else: return f"${valor:,.4f}"
 
-# --- FUNCIONES DE DATOS EN VIVO (BINANCE API - ANTI GEO-BLOQUEO) ---
+# --- DATOS EN VIVO (BINANCE API) ---
 @st.cache_data(ttl=60)
 def obtener_datos_binance(symbol="SOLUSDT", interval="1h", limit=100):
     symbol = symbol.upper().strip()
@@ -219,25 +229,22 @@ with vip_menu:
         email_user = st.text_input(t["email_ph"])
         submitted_vip = st.form_submit_button(t["btn_notify"])
         if submitted_vip and email_user:
-                    # Usamos la nueva función de Google Sheets
-                    if registrar_nuevo_vip_gs(email_user, "BinancePay"):
-                        st.session_state['es_vip'] = True
-                        st.success("OK!")
-                        st.rerun() 
+            if registrar_nuevo_vip_gs(email_user, "BinancePay"):
+                # Muestra el mensaje pero ya NO da acceso ni hace rerun
+                st.success("¡Registro exitoso! Tu pago está en verificación. Serás notificado una vez se te otorgue el acceso.")
 
 login_menu = st.sidebar.expander(t["vip_login"])
 with login_menu:
     email_login = st.text_input(t["login_ph"])
     if st.button(t["btn_login"]):
-                # Verificamos directamente en Google Sheets
-                if es_usuario_vip_gs(email_login):
-                    st.session_state['es_vip'] = True
-                    st.success("OK!")
-                    st.rerun()
-                else:
-                    st.error("Error / Not found")   
+        if es_usuario_vip_gs(email_login):
+            st.session_state['es_vip'] = True
+            st.success("¡Bienvenido! Tienes acceso ilimitado.")
+            st.rerun()
+        else:
+            st.error("Error / Correo no encontrado o Aún en estado 'Pendiente'.")   
 
-# --- ACTUALIZACIÓN VISUAL DEL CONTADOR ---
+# --- ACTUALIZACIÓN VISUAL DEL CONTADOR AL CARGAR ---
 if st.session_state['es_vip']:
     panel_status.success(t["vip_active"])
 else:
@@ -271,14 +278,16 @@ if st.button(t["btn_calc"]):
 
         if df is not None and not df.empty and "cierre" in df.columns:
             try:
-                # Restar la consulta y guardar en base de datos al instante
                 if not st.session_state['es_vip']:
                     consultas_restantes -= 1
                     df_visitas.loc[df_visitas['uid'] == uid_actual, 'consultas'] = consultas_restantes
                     df_visitas.to_csv(VISITAS_DB, index=False)
-                    # Forzar recarga ligera para que el panel lateral actualice el número
-                    if consultas_restantes == 0:
-                         st.rerun()
+                    
+                    # Actualiza el contador del panel al instante sin reiniciar la página
+                    if consultas_restantes > 0:
+                        panel_status.info(f"{t['free_left']} **{consultas_restantes}/3**")
+                    else:
+                        panel_status.error(t["free_out"])
 
                 precio_actual = df["cierre"].iloc[-1]
                 atr = (df["high"] - df["low"]).mean()
@@ -307,8 +316,8 @@ if st.button(t["btn_calc"]):
                 df_d = pd.read_csv(DIARIO_DB)
                 pd.concat([df_d, nuevo_trade], ignore_index=True).to_csv(DIARIO_DB, index=False)
                 
-                # Refrescar la pantalla si el usuario cambió de número para que el panel lo detecte
-                st.rerun()
+                # ¡AQUÍ ESTABA EL ERROR! 
+                # Eliminé el st.rerun() que había aquí y que borraba la gráfica al instante.
 
             except Exception as e:
                 st.error(t["err_math"])
