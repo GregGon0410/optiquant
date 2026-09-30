@@ -5,6 +5,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
@@ -13,7 +15,60 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="expanded"
 )
+# --- CONEXIÓN A GOOGLE SHEETS (Caché para optimizar rendimiento) ---
+@st.cache_resource
+def conectar_base_datos():
+    try:
+        # Definir los permisos necesarios para la API
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        # Cargar el archivo JSON local
+        credenciales = Credentials.from_service_account_file("credenciales.json", scopes=scopes)
+        cliente = gspread.authorize(credenciales)
+        
+        # Abrir la hoja de cálculo por su nombre exacto
+        db = cliente.open("OptiQuant_DB")
+        hoja_vip = db.worksheet("usuarios_vip")
+        
+        return hoja_vip
+    except Exception as e:
+        st.error(f"Error conectando a la base de datos Google Sheets. Verifica credenciales.json. Error: {e}")
+        return None
 
+# Inicializar la conexión
+hoja_vip = conectar_base_datos()
+# --- FUNCIONES DE BASE DE DATOS EN LA NUBE ---
+def es_usuario_vip_gs(email_consulta):
+    """Verifica si el correo está en Google Sheets y está Activo"""
+    if hoja_vip is None:
+        return False
+        
+    try:
+        registros = hoja_vip.get_all_records()
+        for fila in registros:
+            if str(fila.get("email", "")).strip().lower() == email_consulta.strip().lower():
+                if str(fila.get("estado", "")) == "Activo":
+                    return True
+    except Exception as e:
+        st.error(f"Error al leer la base de datos: {e}")
+    return False
+
+def registrar_nuevo_vip_gs(email, wallet="N/A"):
+    """Guarda un nuevo usuario VIP directamente en Google Sheets"""
+    if hoja_vip is None:
+        st.error("No hay conexión a la base de datos para registrar.")
+        return False
+        
+    try:
+        import datetime
+        fecha_actual = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        hoja_vip.append_row([email, wallet, fecha_actual, "Activo"])
+        return True
+    except Exception as e:
+        st.error(f"Error al escribir en la base de datos: {e}")
+        return False
 # --- ARCHIVOS DE BASE DE DATOS LOCALES ---
 USUARIOS_DB = "usuarios_vip.csv"
 DIARIO_DB = "diario_trading.csv"
@@ -164,25 +219,23 @@ with vip_menu:
         email_user = st.text_input(t["email_ph"])
         submitted_vip = st.form_submit_button(t["btn_notify"])
         if submitted_vip and email_user:
-            df_u = pd.read_csv(USUARIOS_DB)
-            nuevo_registro = pd.DataFrame([[email_user, "BinancePay", datetime.datetime.now().strftime("%Y-%m-%d"), "Activo"]], columns=["email", "wallet", "fecha", "estado"])
-            df_u = pd.concat([df_u, nuevo_registro], ignore_index=True)
-            df_u.to_csv(USUARIOS_DB, index=False)
-            st.session_state['es_vip'] = True
-            st.success("OK!")
-            st.rerun()
+                    # Usamos la nueva función de Google Sheets
+                    if registrar_nuevo_vip_gs(email_user, "BinancePay"):
+                        st.session_state['es_vip'] = True
+                        st.success("OK!")
+                        st.rerun() 
 
 login_menu = st.sidebar.expander(t["vip_login"])
 with login_menu:
     email_login = st.text_input(t["login_ph"])
     if st.button(t["btn_login"]):
-        df_usuarios = pd.read_csv(USUARIOS_DB)
-        if email_login in df_usuarios['email'].values:
-            st.session_state['es_vip'] = True
-            st.success("OK!")
-            st.rerun()
-        else:
-            st.error("Error / Not found")
+                # Verificamos directamente en Google Sheets
+                if es_usuario_vip_gs(email_login):
+                    st.session_state['es_vip'] = True
+                    st.success("OK!")
+                    st.rerun()
+                else:
+                    st.error("Error / Not found")   
 
 # --- ACTUALIZACIÓN VISUAL DEL CONTADOR ---
 if st.session_state['es_vip']:
